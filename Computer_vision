@@ -1,0 +1,60 @@
+import cv2
+import torch
+import csv
+from deepface import DeepFace
+from retinaface import RetinaFace
+from torchvision import models, transforms
+from PIL import Image
+
+yolo_model = torch.hub.load('ultralytics/yolov5', 'yolov5s')
+faster_rcnn_model = models.detection.fasterrcnn_resnet50_fpn(pretrained=True)
+faster_rcnn_model.eval()
+
+def get_age_gender(face_image):
+    analysis = DeepFace.analyze(face_image, actions=['age', 'gender'])
+    age = analysis[0]['age']
+    gender = analysis[0]['gender']
+    return age, gender
+
+def process_video(video_path, output_csv):
+    cap = cv2.VideoCapture(video_path)
+
+    with open(output_csv, mode='a', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(["Video", "Frame", "Object Type", "Age Group", "Gender", "Speed", "Baggage Size"])
+
+        frame_count = 0
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+            frame_count += 1
+            
+            results = yolo_model(frame)
+            for *box, conf, cls in results.xywh[0]:
+                label = int(cls)
+                if label == 0:
+                    face = frame[int(box[1]):int(box[3]), int(box[0]):int(box[2])]
+                    age, gender = get_age_gender(face)
+                    writer.writerow([video_path, frame_count, "Person", age, gender, "N/A", "N/A"])
+                elif label == 37:
+                    writer.writerow([video_path, frame_count, "Baggage", "N/A", "N/A", "N/A", "Large"])
+                    
+            image_tensor = transforms.ToTensor()(Image.fromarray(frame)).unsqueeze(0)
+            with torch.no_grad():
+                predictions = faster_rcnn_model(image_tensor)
+            for box in predictions[0]['boxes']:
+                cv2.rectangle(frame, tuple(box[:2].int().tolist()), tuple(box[2:].int().tolist()), (255, 0, 0), 2)
+
+            cv2.imshow('Frame', frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+        cap.release()
+        cv2.destroyAllWindows()
+
+video_files = ["video1.mp4", "video2.mp4", "video3.mp4"]
+output_csv = "output.csv"
+
+for video_file in video_files:
+    process_video(video_file, output_csv)
